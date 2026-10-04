@@ -4,6 +4,7 @@
 require 'dotenv/load'
 require 'optparse'
 require_relative 'lib/spotify_client'
+require_relative 'lib/spotify_auth'
 require_relative 'lib/playlist_generator'
 
 def print_banner
@@ -32,26 +33,6 @@ def ensure_gemini_key
   key
 end
 
-def ensure_spotify_token
-  token = ENV['SPOTIFY_ACCESS_TOKEN']&.strip
-  return token if token && !token.empty?
-
-  puts "\n🎵 Spotify Access Token not found."
-  puts "Get one with 'playlist-modify-public' and 'playlist-modify-private' scopes from:"
-  puts "https://developer.spotify.com/documentation/web-api/tutorials/getting-started#request-an-access-token"
-  print "Enter your Spotify Access Token: "
-  token = $stdin.gets&.strip
-
-  if token.nil? || token.empty?
-    warn '❌ A Spotify access token is required. Exiting.'
-    exit 1
-  end
-
-  ENV['SPOTIFY_ACCESS_TOKEN'] = token
-  save_to_env('SPOTIFY_ACCESS_TOKEN', token)
-  token
-end
-
 def save_to_env(key, value)
   env_path = File.expand_path('.env', __dir__)
   content = File.exist?(env_path) ? File.read(env_path) : ''
@@ -64,38 +45,85 @@ def save_to_env(key, value)
   puts "💾 Saved #{key} to .env"
 end
 
-def prompt_refresh_token(error_message = nil)
-  warn "\n⚠️ #{error_message}" if error_message
-  puts "\nSpotify access tokens expire or can hit rate limits."
-  puts "You can generate a fresh token at Spotify Developer Dashboard / Console:"
-  puts "https://developer.spotify.com/documentation/web-api/tutorials/getting-started#request-an-access-token"
-  print "Would you like to enter a new SPOTIFY_ACCESS_TOKEN now? (y/n): "
-  ans = $stdin.gets&.strip&.downcase
-  return nil unless %w[y yes].include?(ans)
+def ensure_spotify_credentials
+  client_id = ENV['SPOTIFY_CLIENT_ID']&.strip
+  client_secret = ENV['SPOTIFY_CLIENT_SECRET']&.strip
 
-  print "Enter new Spotify token: "
-  new_token = $stdin.gets&.strip
-  return nil if new_token.nil? || new_token.empty?
+  # If Client ID and Secret are already set, use them
+  if client_id && !client_id.empty? && client_secret && !client_secret.empty?
+    return { client_id: client_id, client_secret: client_secret }
+  end
 
-  ENV['SPOTIFY_ACCESS_TOKEN'] = new_token
-  save_to_env('SPOTIFY_ACCESS_TOKEN', new_token)
-  new_token
+  # Fallback: check if user still has a manual SPOTIFY_ACCESS_TOKEN
+  if ENV['SPOTIFY_ACCESS_TOKEN'] && !ENV['SPOTIFY_ACCESS_TOKEN'].strip.empty?
+    return { token: ENV['SPOTIFY_ACCESS_TOKEN'].strip }
+  end
+
+  puts "\n========================================================"
+  puts " 🔑 Spotify Developer Credentials Required"
+  puts "========================================================"
+  puts "To avoid Spotify rate limits and enable automatic login:"
+  puts "1. Go to Spotify Developer Dashboard:"
+  puts "   https://developer.spotify.com/dashboard"
+  puts "2. Click 'Create app':"
+  puts "   - App name: AI Spotify Playlist"
+  puts "   - App description: Terminal playlist generator"
+  puts "   - Redirect URI: http://127.0.0.1:8888/callback (REQUIRED)"
+  puts "   - Which API/SDKs are you planning to use: Web API"
+  puts "3. Save and go to Settings to copy your Client ID and Client Secret."
+  puts "========================================================\n"
+
+  print "Enter your SPOTIFY_CLIENT_ID: "
+  client_id = $stdin.gets&.strip
+  if client_id.nil? || client_id.empty?
+    warn "❌ SPOTIFY_CLIENT_ID is required. Exiting."
+    exit 1
+  end
+
+  print "Enter your SPOTIFY_CLIENT_SECRET: "
+  client_secret = $stdin.gets&.strip
+  if client_secret.nil? || client_secret.empty?
+    warn "❌ SPOTIFY_CLIENT_SECRET is required. Exiting."
+    exit 1
+  end
+
+  ENV['SPOTIFY_CLIENT_ID'] = client_id
+  ENV['SPOTIFY_CLIENT_SECRET'] = client_secret
+  save_to_env('SPOTIFY_CLIENT_ID', client_id)
+  save_to_env('SPOTIFY_CLIENT_SECRET', client_secret)
+
+  { client_id: client_id, client_secret: client_secret }
 end
 
 def init_spotify_client
-  loop do
-    token = ensure_spotify_token
-    client = SpotifyClient.new(token: token)
-    begin
-      user = client.current_user
-      user_name = user['display_name'] || user['id']
-      puts "👤 Connected as Spotify user: #{user_name} (#{user['id']})"
-      return client
-    rescue SpotifyClient::AuthenticationError, SpotifyClient::ApiError => e
-      new_token = prompt_refresh_token(e.message)
-      exit 1 unless new_token
-    end
+  creds = ensure_spotify_credentials
+
+  if creds[:client_id] && creds[:client_secret]
+    refresh_token = ENV['SPOTIFY_REFRESH_TOKEN']&.strip
+    auth = SpotifyAuth.new(
+      client_id: creds[:client_id],
+      client_secret: creds[:client_secret],
+      refresh_token: refresh_token,
+      on_token_refresh: lambda do |new_token|
+        ENV['SPOTIFY_REFRESH_TOKEN'] = new_token
+        save_to_env('SPOTIFY_REFRESH_TOKEN', new_token)
+      end
+    )
+    client = SpotifyClient.new(auth: auth)
+  else
+    client = SpotifyClient.new(token: creds[:token])
   end
+
+  user = client.current_user
+  user_name = user['display_name'] || user['id']
+  puts "👤 Connected as Spotify user: #{user_name} (#{user['id']})"
+  client
+rescue SpotifyAuth::Error => e
+  warn "\n❌ Authentication failed: #{e.message}"
+  exit 1
+rescue StandardError => e
+  warn "\n❌ Could not connect to Spotify: #{e.message}"
+  exit 1
 end
 
 # Option 1: Create a new playlist from prompt

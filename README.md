@@ -19,7 +19,7 @@ A terminal-only Ruby application that transforms any prompt into a curated Spoti
 - Ruby 3.2+ (tested on Ruby 4.0)
 - Bundler
 - Google Gemini API key ([Get one free at Google AI Studio](https://aistudio.google.com/))
-- Spotify Access Token with `playlist-modify-public` and `playlist-modify-private` permissions ([Get one from Spotify Web API Tutorials/Console](https://developer.spotify.com/documentation/web-api/tutorials/getting-started#request-an-access-token))
+- Spotify Developer Application ([Create free at Spotify Developer Dashboard](https://developer.spotify.com/dashboard))
 
 ---
 
@@ -30,8 +30,14 @@ A terminal-only Ruby application that transforms any prompt into a curated Spoti
    bundle install
    ```
 
-2. **Configure environment variables**:
-   Create or edit `.env` (a `.env.example` template is provided):
+2. **Create a Spotify Developer App**:
+   - Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and click **Create app**.
+   - **App name**: `AI Spotify Playlist`
+   - **Redirect URI**: `http://127.0.0.1:8888/callback` *(Crucial: must match exactly)*
+   - **APIs used**: Check **Web API**
+   - Save and open **Settings** to view your **Client ID** and **Client Secret**.
+
+3. **Configure environment variables in `.env`**:
    ```env
    # Google Gemini API Key
    GEMINI_API_KEY=your_gemini_api_key
@@ -39,12 +45,13 @@ A terminal-only Ruby application that transforms any prompt into a curated Spoti
    # Gemini Model (optional, default: gemini-3.8-flash)
    GEMINI_MODEL=gemini-3.8-flash
 
-   # Spotify User Access Token (from Spotify Web API)
-   SPOTIFY_ACCESS_TOKEN=your_spotify_token
+   # Spotify Developer Application Credentials
+   SPOTIFY_CLIENT_ID=your_client_id
+   SPOTIFY_CLIENT_SECRET=your_client_secret
    ```
 
-> [!NOTE]
-> Spotify access tokens obtained from the Spotify Web API console typically expire in **1 hour**. When expired, simply get a new token from the developer console and update `SPOTIFY_ACCESS_TOKEN` in your `.env`.
+> [!TIP]
+> **No manual token copying needed!** On first run, the app will open your browser to log in to Spotify once. The app securely saves your `SPOTIFY_REFRESH_TOKEN` in `.env` and automatically refreshes your session in the background forever.
 
 ---
 

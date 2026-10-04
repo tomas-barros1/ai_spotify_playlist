@@ -10,11 +10,18 @@ class SpotifyClient
   class AuthenticationError < StandardError; end
   class ApiError < StandardError; end
 
-  attr_reader :token
+  attr_reader :token, :auth
 
-  def initialize(token:)
+  def initialize(token: nil, auth: nil)
+    @auth = auth
     @token = token&.strip
-    raise AuthenticationError, 'Spotify access token cannot be empty.' if @token.nil? || @token.empty?
+    if @auth.nil? && (@token.nil? || @token.empty?)
+      raise AuthenticationError, 'Either a SpotifyAuth instance or static access token must be provided.'
+    end
+  end
+
+  def current_token
+    @auth ? @auth.token : @token
   end
 
   # Searches for a track on Spotify using track title and optional artist.
@@ -196,7 +203,7 @@ class SpotifyClient
     nil
   end
 
-  def fetch_web_api(endpoint, method, body = nil)
+  def fetch_web_api(endpoint, method, body = nil, retry_on_auth_fail: true)
     uri = URI("#{BASE_URL}/#{endpoint.sub(%r{\A/}, '')}")
     http = Net::HTTP.new(uri.hostname, uri.port)
     http.use_ssl = true
@@ -214,7 +221,8 @@ class SpotifyClient
             raise ArgumentError, "Unsupported HTTP method: #{method}"
           end
 
-    req['Authorization'] = "Bearer #{@token}"
+    active_token = current_token
+    req['Authorization'] = "Bearer #{active_token}"
     req['Content-Type'] = 'application/json'
     req['Accept'] = 'application/json'
     req.body = JSON.generate(body) if body
@@ -227,12 +235,17 @@ class SpotifyClient
     when 204
       {}
     when 401
-      raise AuthenticationError, 'Spotify token is invalid or expired (HTTP 401). Please update your SPOTIFY_ACCESS_TOKEN.'
+      if retry_on_auth_fail && @auth
+        # Try refreshing the token and retrying the request once
+        @auth.refresh_access_token!
+        return fetch_web_api(endpoint, method, body, retry_on_auth_fail: false)
+      end
+      raise AuthenticationError, 'Spotify token is invalid or expired (HTTP 401). Please re-authenticate.'
     when 403
-      raise ApiError, "Spotify API returned 403 Forbidden. Make sure your token has permissions 'playlist-modify-public' and 'playlist-modify-private'."
+      raise ApiError, "Spotify API returned 403 Forbidden. Make sure your app permissions include 'playlist-modify-public' and 'playlist-modify-private'."
     when 429
       retry_after = response['Retry-After']
-      raise ApiError, "Spotify rate limit / quota exceeded (HTTP 429#{", retry after #{retry_after}s" if retry_after}). Please provide a fresh SPOTIFY_ACCESS_TOKEN."
+      raise ApiError, "Spotify rate limit / quota exceeded (HTTP 429#{", retry after #{retry_after}s" if retry_after}). Please wait or switch credentials."
     else
       raise ApiError, "Spotify API request failed [#{response.code}]: #{response.body}"
     end
