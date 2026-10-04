@@ -8,61 +8,93 @@ A terminal-only Ruby application that transforms any prompt into a curated Spoti
 
 - **Gemini AI Music Curation**: Uses `ruby_llm` and Gemini (default: `gemini-3.8-flash`) to generate cohesive playlist themes, descriptions, and curated song selections.
 - **Structured Schema with Schematist**: Guaranteed JSON schema response containing track titles and artists using `Schematist::Schema`.
-- **Spotify Web API Integration**: Accurately searches Spotify for real track URIs (`spotify:track:...`), creates playlists (`POST v1/me/playlists`), and adds items (`POST v1/playlists/{id}/items`).
-- **Terminal First**: Run interactively or directly pass arguments in your shell.
-- **Token Management**: Easily loads keys from `.env`, with automatic terminal prompting and fallback to `.env`.
+- **Spotify Developer OAuth2**: Full Authorization Code flow with automatic token refresh — no manual copy-pasting tokens ever.
+- **Interactive Terminal Menu**: Create new playlists or edit your existing ones (search by name, add/remove tracks, rename).
+- **Docker Support**: Run the full app in a container with a single command.
 
 ---
 
 ## 📋 Requirements
 
-- Ruby 3.2+ (tested on Ruby 4.0)
-- Bundler
-- Google Gemini API key ([Get one free at Google AI Studio](https://aistudio.google.com/))
-- Spotify Developer Application ([Create free at Spotify Developer Dashboard](https://developer.spotify.com/dashboard))
+- **Gemini API Key** — [Get one free at Google AI Studio](https://aistudio.google.com/)
+- **Spotify Developer App** — [Create free at Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+- Ruby 3.2+ **or** Docker (no Ruby installation needed)
 
 ---
 
 ## 🛠️ Setup
 
-1. **Install gems**:
-   ```bash
-   bundle install
-   ```
+### 1. Create a Spotify Developer App
 
-2. **Create a Spotify Developer App**:
-   - Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and click **Create app**.
+1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and click **Create app**.
+2. Fill in:
    - **App name**: `AI Spotify Playlist`
-   - **Redirect URI**: `http://127.0.0.1:8888/callback` *(Crucial: must match exactly)*
+   - **Redirect URI**: `http://127.0.0.1:8888/callback` *(must match exactly)*
    - **APIs used**: Check **Web API**
-   - Save and open **Settings** to view your **Client ID** and **Client Secret**.
+3. Click **Save**, then open **Settings** to copy your **Client ID** and **Client Secret**.
 
-3. **Configure environment variables in `.env`**:
-   ```env
-   # Google Gemini API Key
-   GEMINI_API_KEY=your_gemini_api_key
+### 2. Configure `.env`
 
-   # Gemini Model (optional, default: gemini-3.8-flash)
-   GEMINI_MODEL=gemini-3.8-flash
+Copy the template and fill in your credentials:
+```bash
+cp .env.example .env
+```
+```env
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3.8-flash
 
-   # Spotify Developer Application Credentials
-   SPOTIFY_CLIENT_ID=your_client_id
-   SPOTIFY_CLIENT_SECRET=your_client_secret
-   ```
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+```
 
 > [!TIP]
-> **No manual token copying needed!** On first run, the app will open your browser to log in to Spotify once. The app securely saves your `SPOTIFY_REFRESH_TOKEN` in `.env` and automatically refreshes your session in the background forever.
+> On first run, the app opens your browser to authorize Spotify. After you approve, a `SPOTIFY_REFRESH_TOKEN` is saved automatically to `.env` — future runs need no browser interaction.
 
 ---
 
-## 💻 Usage
+## 💻 Running Locally (Ruby)
 
-Run the terminal application:
 ```bash
+bundle install
 bundle exec ruby main.rb
 ```
 
-### Main Menu Options:
+---
+
+## 🐳 Running with Docker
+
+### Quick start
+
+```bash
+# Build and run interactively (first time)
+docker compose run --rm --service-ports app
+```
+
+> [!IMPORTANT]
+> The `--service-ports` flag is required on first login so the Spotify OAuth2 callback (`http://127.0.0.1:8888/callback`) can reach the container from your host browser.
+> After the first login the `SPOTIFY_REFRESH_TOKEN` is saved to your `.env` and future runs no longer need a browser.
+
+### Subsequent runs (no OAuth needed)
+
+```bash
+docker compose run --rm app
+```
+
+### Build only
+
+```bash
+docker compose build
+```
+
+### Notes
+
+- Port `8888` is mapped from your host to the container for the OAuth2 callback.
+- Your `.env` file is **mounted as a volume** so tokens saved by the app are persisted on your host immediately.
+- `.env` is **never baked into the image** — secrets stay safe.
+
+---
+
+## 📋 Main Menu
 
 ```text
 ========================================================
@@ -73,29 +105,34 @@ bundle exec ruby main.rb
   [0] 🚪 Exit
 ```
 
-#### Option 1: Create a New Playlist
-- Enter your playlist idea/vibe (e.g., `"lo-fi hip hop study beats"`).
+### Option 1: Create a New Playlist
+- Enter your playlist idea/vibe (e.g. `"lo-fi hip hop study beats"`).
 - Select track count (default: 10).
-- Gemini curates the tracks and title using `ruby_llm`.
-- Songs are automatically verified and added to your Spotify account.
+- Gemini curates the tracks and title; songs are verified and added to Spotify.
 
-#### Option 2: Edit an Existing Playlist
-- **View all playlists**: Automatically lists all your Spotify playlists with track count and owner.
-- **Search by name**: Simply type any keyword (e.g. `funk`, `rock`, `jazz`) to instantly filter your playlists.
-- **Select & Edit**: Enter the playlist number to access editing actions:
-  - `[1] 🤖 Add more tracks with Gemini AI` (prompt-based addition matching the vibe)
-  - `[2] ➕ Add a track manually` (search title/artist)
-  - `[3] 📄 View current tracks in this playlist`
-  - `[4] ❌ Remove tracks from this playlist`
-  - `[5] ✏️  Rename playlist or update description`
+### Option 2: Edit an Existing Playlist
+Only shows playlists **you own or can collaborate on**.
+- **Search by name**: Type any keyword to filter your playlists instantly.
+- **Select & Edit**:
+  - `[1] 🤖 Add more tracks with Gemini AI`
+  - `[2] ➕ Add a track manually`
+  - `[3] 📄 View tracks`
+  - `[4] ❌ Remove tracks`
+  - `[5] ✏️  Rename / update description`
 
 ---
 
 ## 📂 Project Structure
 
-- `main.rb` - CLI entrypoint, argument parsing, terminal output, and orchestrator.
-- `lib/playlist_generator.rb` - Configures `RubyLLM` and uses `Schematist::Schema` with Gemini to generate structured track recommendations.
-- `lib/spotify_client.rb` - Spotify API client (`search_track`, `create_playlist`, `add_tracks`) based on `main.js`.
-- `Gemfile` - Declares `ruby_llm` and `dotenv` dependencies.
-- `.env` - Local configuration for API keys.
-- `main.js` - Original JavaScript reference script.
+```
+.
+├── main.rb                   # CLI entrypoint and interactive menu
+├── lib/
+│   ├── spotify_auth.rb       # OAuth2 Authorization Code flow + auto-refresh
+│   ├── spotify_client.rb     # Spotify Web API client
+│   └── playlist_generator.rb # Gemini AI curation via RubyLLM
+├── Gemfile
+├── Dockerfile
+├── docker-compose.yml
+└── .env.example
+```
