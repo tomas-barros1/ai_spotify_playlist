@@ -213,32 +213,33 @@ def create_playlist_flow(spotify, gemini_key, default_model)
 end
 
 # Display a table of playlists
-def print_playlists_table(playlists, title = "Your Spotify Playlists")
+def print_playlists_table(playlists, title = "Your Playlists")
   puts "\n========================================================"
-  puts " #{title} (#{playlists.size} total)"
+  puts " #{title} (#{playlists.size} shown)"
   puts "========================================================"
-  puts format(" %4s | %-40s | %-6s | %s", "#", "Name", "Tracks", "Owner")
+  puts format(" %4s | %-40s | %-6s | %s", "#", "Name", "Tracks", "Type")
   puts "------+------------------------------------------+--------+------------------"
 
   playlists.each_with_index do |p, i|
     truncated_name = p[:name].length > 40 ? "#{p[:name][0...37]}..." : p[:name]
-    puts format(" %4d | %-40s | %-6s | %s", i + 1, truncated_name, p[:total_tracks], p[:owner])
+    type_label = p[:collaborative] ? "collab" : "owned"
+    puts format(" %4d | %-40s | %-6s | %s", i + 1, truncated_name, p[:total_tracks], type_label)
   end
   puts "========================================================"
 end
 
 # Option 2: Edit an existing playlist
 def edit_playlist_flow(spotify, gemini_key, default_model)
-  puts "\n📥 Fetching all your Spotify playlists..."
+  puts "\n📥 Fetching your editable playlists..."
   all_playlists = begin
-    spotify.user_playlists
+    spotify.user_playlists(editable_only: true)
   rescue StandardError => e
     warn "❌ Could not fetch playlists: #{e.message}"
     return
   end
 
   if all_playlists.empty?
-    puts "No playlists found in your Spotify account."
+    puts "No editable playlists found. Create one first with Option 1!"
     return
   end
 
@@ -246,7 +247,7 @@ def edit_playlist_flow(spotify, gemini_key, default_model)
   is_filtered = false
 
   loop do
-    title = is_filtered ? "🔍 Filtered Playlists" : "📋 All User Playlists"
+    title = is_filtered ? "🔍 Filtered Results" : "✏️  My Editable Playlists"
     print_playlists_table(current_list, title)
 
     puts "\nActions:"

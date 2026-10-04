@@ -78,10 +78,11 @@ class SpotifyClient
     track_uris
   end
 
-  # Fetches all playlists owned or followed by current user
-  def user_playlists(limit: 50)
+  # Fetches playlists owned or collaborative for the current user
+  def user_playlists(editable_only: true, limit: 50)
     all_playlists = []
     offset = 0
+    my_id = current_user['id']
 
     loop do
       data = fetch_web_api("v1/me/playlists?limit=#{limit}&offset=#{offset}", :get)
@@ -93,6 +94,12 @@ class SpotifyClient
       break if offset >= (data['total'] || 0)
     end
 
+    if editable_only
+      all_playlists.select! do |p|
+        p.dig('owner', 'id') == my_id || p['collaborative'] == true
+      end
+    end
+
     all_playlists.map do |p|
       {
         id: p['id'],
@@ -100,6 +107,7 @@ class SpotifyClient
         description: p['description'],
         owner: p.dig('owner', 'display_name') || p.dig('owner', 'id'),
         owner_id: p.dig('owner', 'id'),
+        collaborative: p['collaborative'] == true,
         total_tracks: p.dig('items', 'total') || p.dig('tracks', 'total') || 0,
         url: p.dig('external_urls', 'spotify'),
         uri: p['uri'],
@@ -178,9 +186,9 @@ class SpotifyClient
     track_uris
   end
 
-  # Gets current user's profile to verify token and retrieve user name
+  # Gets current user's profile (memoized per session to avoid redundant calls)
   def current_user
-    fetch_web_api('v1/me', :get)
+    @current_user ||= fetch_web_api('v1/me', :get)
   end
 
   private
