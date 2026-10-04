@@ -9,7 +9,7 @@ require_relative 'lib/playlist_generator'
 def print_banner
   puts <<~BANNER
     ========================================================
-     🎧 AI Spotify Playlist Generator (Ruby + RubyLLM) 🎧
+     🎧 AI Spotify Playlist Generator & Manager (Ruby) 🎧
     ========================================================
   BANNER
 end
@@ -23,38 +23,18 @@ def ensure_gemini_key
   key = $stdin.gets&.strip
 
   if key.nil? || key.empty?
-    warn "❌ A Gemini API key is required. Exiting."
+    warn '❌ A Gemini API key is required. Exiting.'
     exit 1
   end
 
   ENV['GEMINI_API_KEY'] = key
-
-  # Save to .env for convenience if .env exists
-  env_path = File.expand_path('.env', __dir__)
-  if File.exist?(env_path)
-    content = File.read(env_path)
-    updated = if content.match?(/^GEMINI_API_KEY=/)
-                content.sub(/^GEMINI_API_KEY=.*$/, "GEMINI_API_KEY=#{key}")
-              else
-                "#{content.strip}\nGEMINI_API_KEY=#{key}\n"
-              end
-    File.write(env_path, updated)
-    puts "💾 Saved GEMINI_API_KEY to .env for future runs."
-  end
-
+  save_to_env('GEMINI_API_KEY', key)
   key
 end
 
 def ensure_spotify_token
   token = ENV['SPOTIFY_ACCESS_TOKEN']&.strip
   return token if token && !token.empty?
-
-  # Check main.js fallback if present
-  main_js_path = File.expand_path('main.js', __dir__)
-  if File.exist?(main_js_path)
-    match = File.read(main_js_path).match(/const token = '([^']+)'/)
-    return match[1].strip if match && !match[1].strip.empty?
-  end
 
   puts "\n🎵 Spotify Access Token not found."
   puts "Get one with 'playlist-modify-public' and 'playlist-modify-private' scopes from:"
@@ -63,97 +43,97 @@ def ensure_spotify_token
   token = $stdin.gets&.strip
 
   if token.nil? || token.empty?
-    warn "❌ A Spotify access token is required. Exiting."
+    warn '❌ A Spotify access token is required. Exiting.'
     exit 1
   end
 
   ENV['SPOTIFY_ACCESS_TOKEN'] = token
+  save_to_env('SPOTIFY_ACCESS_TOKEN', token)
   token
 end
 
-def main
-  options = {
-    tracks: 10,
-    public: false,
-    model: ENV.fetch('GEMINI_MODEL', 'gemini-3.8-flash')
-  }
+def save_to_env(key, value)
+  env_path = File.expand_path('.env', __dir__)
+  content = File.exist?(env_path) ? File.read(env_path) : ''
+  updated = if content.match?(/^#{key}=/)
+              content.sub(/^#{key}=.*$/, "#{key}=#{value}")
+            else
+              "#{content.strip}\n#{key}=#{value}\n"
+            end
+  File.write(env_path, updated)
+  puts "💾 Saved #{key} to .env"
+end
 
-  parser = OptionParser.new do |opts|
-    opts.banner = 'Usage: ruby main.rb [options] ["playlist prompt / theme"]'
+def prompt_refresh_token(error_message = nil)
+  warn "\n⚠️ #{error_message}" if error_message
+  puts "\nSpotify access tokens expire or can hit rate limits."
+  puts "You can generate a fresh token at Spotify Developer Dashboard / Console:"
+  puts "https://developer.spotify.com/documentation/web-api/tutorials/getting-started#request-an-access-token"
+  print "Would you like to enter a new SPOTIFY_ACCESS_TOKEN now? (y/n): "
+  ans = $stdin.gets&.strip&.downcase
+  return nil unless %w[y yes].include?(ans)
 
-    opts.on('-n', '--tracks COUNT', Integer, 'Number of tracks to generate (default: 10)') do |n|
-      options[:tracks] = n
-    end
+  print "Enter new Spotify token: "
+  new_token = $stdin.gets&.strip
+  return nil if new_token.nil? || new_token.empty?
 
-    opts.on('-p', '--public', 'Make the playlist public on Spotify (default: private)') do
-      options[:public] = true
-    end
+  ENV['SPOTIFY_ACCESS_TOKEN'] = new_token
+  save_to_env('SPOTIFY_ACCESS_TOKEN', new_token)
+  new_token
+end
 
-    opts.on('-m', '--model MODEL', String, 'Gemini model to use (default: gemini-3.8-flash)') do |m|
-      options[:model] = m
-    end
-
-    opts.on('-h', '--help', 'Show this help message') do
-      puts opts
-      exit 0
+def init_spotify_client
+  loop do
+    token = ensure_spotify_token
+    client = SpotifyClient.new(token: token)
+    begin
+      user = client.current_user
+      user_name = user['display_name'] || user['id']
+      puts "👤 Connected as Spotify user: #{user_name} (#{user['id']})"
+      return client
+    rescue SpotifyClient::AuthenticationError, SpotifyClient::ApiError => e
+      new_token = prompt_refresh_token(e.message)
+      exit 1 unless new_token
     end
   end
+end
 
-  parser.parse!
-
-  print_banner
-
-  gemini_key = ensure_gemini_key
-  spotify_token = ensure_spotify_token
-
-  # Initialize Spotify client and verify access
-  puts "\n📡 Connecting to Spotify..."
-  spotify = SpotifyClient.new(token: spotify_token)
-  user = begin
-    spotify.current_user
-  rescue SpotifyClient::AuthenticationError => e
-    warn "\n❌ #{e.message}"
-    warn 'Spotify tokens expire in 1 hour. Get a fresh token from:'
-    warn 'https://developer.spotify.com/documentation/web-api/tutorials/getting-started#request-an-access-token'
-    warn 'Then update SPOTIFY_ACCESS_TOKEN in .env.'
-    exit 1
-  rescue StandardError => e
-    warn "\n❌ Could not connect to Spotify: #{e.message}"
-    exit 1
-  end
-
-  user_name = user['display_name'] || user['id']
-  puts "👤 Logged in as: #{user_name} (#{user['id']})"
-
-  # Get user prompt
-  prompt = ARGV.join(' ').strip
-  if prompt.empty?
-    puts "\n💡 Example ideas:"
-    puts "   - 'High energy synthwave for night driving'"
-    puts "   - 'Mellow acoustic indie folk for a rainy afternoon'"
-    puts "   - 'Late 90s alternative rock workout'"
-    puts "   - 'Bossa nova and chill jazz for studying'\n"
-    print '🎙️  What kind of playlist do you want to create? '
-    prompt = $stdin.gets&.strip
-  end
+# Option 1: Create a new playlist from prompt
+def create_playlist_flow(spotify, gemini_key, default_model)
+  puts "\n--------------------------------------------------------"
+  puts " 🎵 Option 1: Create a New Playlist with Gemini AI"
+  puts "--------------------------------------------------------"
+  puts "💡 Example ideas:"
+  puts "   - 'High energy synthwave for night driving'"
+  puts "   - 'Mellow acoustic indie folk for a rainy afternoon'"
+  puts "   - 'Late 90s alternative rock workout'"
+  puts "   - 'Bossa nova and chill jazz for studying'"
+  print "\n🎙️  Enter your playlist prompt/idea: "
+  prompt = $stdin.gets&.strip
 
   if prompt.nil? || prompt.empty?
-    warn '❌ No prompt provided. Exiting.'
-    exit 1
+    puts "⚠️ No prompt entered. Returning to menu."
+    return
   end
 
-  puts "\n🤖 Prompt: \"#{prompt}\""
-  puts "⏳ Consulting Gemini (#{options[:model]}) via RubyLLM..."
+  print "💿 Number of tracks to curate (default 10): "
+  track_count_input = $stdin.gets&.strip
+  track_count = track_count_input.empty? ? 10 : [track_count_input.to_i, 1].max
 
-  generator = PlaylistGenerator.new(api_key: gemini_key, model: options[:model])
+  print "🌐 Make playlist public? (y/N): "
+  is_public = %w[y yes].include?($stdin.gets&.strip&.downcase)
+
+  puts "\n⏳ Asking Gemini (#{default_model}) to curate your playlist..."
+  generator = PlaylistGenerator.new(api_key: gemini_key, model: default_model)
+
   curated = begin
-    generator.generate(prompt, track_count: options[:tracks])
+    generator.generate(prompt, track_count: track_count)
   rescue StandardError => e
-    warn "\n❌ Failed to generate playlist with Gemini: #{e.message}"
-    exit 1
+    warn "❌ Failed to generate with Gemini: #{e.message}"
+    return
   end
 
-  puts "\n📋 Gemini curated:"
+  puts "\n📋 Gemini Curated Tracklist:"
   puts "   Title:       #{curated[:name]}"
   puts "   Description: #{curated[:description]}"
   puts "   Tracks (#{curated[:tracks].size}):"
@@ -161,7 +141,7 @@ def main
     puts "     #{format('%2d', i + 1)}. #{t[:title]} - #{t[:artist]}"
   end
 
-  puts "\n🔍 Searching Spotify for matching tracks..."
+  puts "\n🔍 Searching Spotify for tracks..."
   found_tracks = []
   curated[:tracks].each_with_index do |track_info, idx|
     print "   [#{idx + 1}/#{curated[:tracks].size}] #{track_info[:title]} - #{track_info[:artist]} ... "
@@ -170,32 +150,31 @@ def main
       puts "✓ (#{result[:name]} by #{result[:artist]})"
       found_tracks << result
     else
-      puts '✗ (Not found on Spotify, skipping)'
+      puts "✗ (Not found, skipped)"
     end
   end
 
   if found_tracks.empty?
-    warn "\n❌ None of the suggested tracks could be found on Spotify. Please try a different prompt."
-    exit 1
+    warn "❌ No tracks could be found on Spotify. Returning to menu."
+    return
   end
 
   puts "\n✨ Creating playlist on Spotify..."
-  description_with_attribution = "#{curated[:description]} [Generated with Gemini & RubyLLM]"
+  desc_attr = "#{curated[:description]} [Generated with Gemini & RubyLLM]"
   playlist = spotify.create_playlist(
     name: curated[:name],
-    description: description_with_attribution,
-    is_public: options[:public]
+    description: desc_attr,
+    is_public: is_public
   )
 
-  puts "   Playlist created: '#{playlist[:name]}' (ID: #{playlist[:id]})"
-
-  puts "➕ Adding #{found_tracks.size} tracks to the playlist..."
+  puts "   Created playlist: '#{playlist[:name]}' (ID: #{playlist[:id]})"
+  puts "➕ Adding #{found_tracks.size} tracks to Spotify..."
   spotify.add_tracks(playlist[:id], found_tracks.map { |t| t[:uri] })
 
   puts <<~SUCCESS
 
     ========================================================
-     🎉 SUCCESS! Your playlist is ready on Spotify!
+     🎉 SUCCESS! Your playlist is live on Spotify!
     ========================================================
      🎵 Name:   #{playlist[:name]}
      📝 About:  #{curated[:description]}
@@ -203,6 +182,345 @@ def main
      🔗 Link:   #{playlist[:url]}
     ========================================================
   SUCCESS
+end
+
+# Display a table of playlists
+def print_playlists_table(playlists, title = "Your Spotify Playlists")
+  puts "\n========================================================"
+  puts " #{title} (#{playlists.size} total)"
+  puts "========================================================"
+  puts format(" %4s | %-40s | %-6s | %s", "#", "Name", "Tracks", "Owner")
+  puts "------+------------------------------------------+--------+------------------"
+
+  playlists.each_with_index do |p, i|
+    truncated_name = p[:name].length > 40 ? "#{p[:name][0...37]}..." : p[:name]
+    puts format(" %4d | %-40s | %-6s | %s", i + 1, truncated_name, p[:total_tracks], p[:owner])
+  end
+  puts "========================================================"
+end
+
+# Option 2: Edit an existing playlist
+def edit_playlist_flow(spotify, gemini_key, default_model)
+  puts "\n📥 Fetching all your Spotify playlists..."
+  all_playlists = begin
+    spotify.user_playlists
+  rescue StandardError => e
+    warn "❌ Could not fetch playlists: #{e.message}"
+    return
+  end
+
+  if all_playlists.empty?
+    puts "No playlists found in your Spotify account."
+    return
+  end
+
+  current_list = all_playlists
+  is_filtered = false
+
+  loop do
+    title = is_filtered ? "🔍 Filtered Playlists" : "📋 All User Playlists"
+    print_playlists_table(current_list, title)
+
+    puts "\nActions:"
+    puts "  • Enter a playlist NUMBER (1-#{current_list.size}) to select it"
+    puts "  • Type a search term (e.g. 'rock' or 's jazz') to filter by name"
+    puts "  • Type 'all' to show all #{all_playlists.size} playlists"
+    puts "  • Type '0', 'q', or 'back' to return to Main Menu"
+
+    print "\n👉 Select playlist or search by name: "
+    input = $stdin.gets&.strip
+
+    break if input.nil? || %w[0 q back exit].include?(input.downcase)
+
+    if input.downcase == 'all'
+      current_list = all_playlists
+      is_filtered = false
+      next
+    end
+
+    # Check if user entered a number to select from current list
+    if input.match?(/^\d+$/)
+      idx = input.to_i - 1
+      if idx >= 0 && idx < current_list.size
+        selected = current_list[idx]
+        playlist_editor_menu(spotify, selected, gemini_key, default_model)
+        # Refresh playlist list after editing
+        all_playlists = (spotify.user_playlists rescue all_playlists)
+        current_list = is_filtered ? all_playlists.select { |p| p[:name].downcase.include?(input.downcase) } : all_playlists
+        next
+      else
+        puts "⚠️ Invalid playlist number. Please select between 1 and #{current_list.size}."
+        next
+      end
+    end
+
+    # Otherwise, treat as search query by playlist name
+    query = input.sub(/^s\s+/i, '').strip.downcase
+    matches = all_playlists.select { |p| p[:name].downcase.include?(query) }
+
+    if matches.empty?
+      puts "\n⚠️ No playlists found matching \"#{query}\". Showing full list."
+      current_list = all_playlists
+      is_filtered = false
+    else
+      current_list = matches
+      is_filtered = true
+    end
+  end
+end
+
+# Sub-menu for a selected playlist
+def playlist_editor_menu(spotify, playlist, gemini_key, default_model)
+  loop do
+    puts "\n========================================================"
+    puts " 🎵 Managing Playlist: \"#{playlist[:name]}\""
+    puts " 💿 Total Tracks: #{playlist[:total_tracks]} | Owner: #{playlist[:owner]}"
+    puts " 🔗 URL: #{playlist[:url]}"
+    puts "========================================================"
+    puts "  [1] 🤖 Add more tracks with Gemini AI (prompt-based)"
+    puts "  [2] ➕ Add a track manually (search title/artist)"
+    puts "  [3] 📄 View tracks in this playlist"
+    puts "  [4] ❌ Remove tracks from this playlist"
+    puts "  [5] ✏️  Edit playlist name & description"
+    puts "  [0] 🔙 Back to Playlists List"
+    print "\nEnter choice (1-5 or 0): "
+
+    choice = $stdin.gets&.strip
+
+    case choice
+    when '1'
+      add_tracks_with_ai(spotify, playlist, gemini_key, default_model)
+    when '2'
+      add_track_manually(spotify, playlist)
+    when '3'
+      view_playlist_tracks(spotify, playlist)
+    when '4'
+      remove_playlist_tracks(spotify, playlist)
+    when '5'
+      edit_playlist_details(spotify, playlist)
+    when '0', 'q', 'back'
+      break
+    else
+      puts "⚠️ Invalid option. Please choose 1-5 or 0."
+    end
+  end
+end
+
+# Edit Action 1: Add tracks using Gemini
+def add_tracks_with_ai(spotify, playlist, gemini_key, default_model)
+  puts "\n🤖 Add Tracks with Gemini AI"
+  print "What vibe or songs do you want to add to '#{playlist[:name]}'? "
+  prompt = $stdin.gets&.strip
+  return if prompt.nil? || prompt.empty?
+
+  print "How many songs to add? (default 5): "
+  count_input = $stdin.gets&.strip
+  count = count_input.empty? ? 5 : [count_input.to_i, 1].max
+
+  puts "\n⏳ Consulting Gemini (#{default_model})..."
+  generator = PlaylistGenerator.new(api_key: gemini_key, model: default_model)
+  full_prompt = "For the existing playlist titled '#{playlist[:name]}', suggest #{count} additional songs that fit this request: #{prompt}"
+
+  curated = begin
+    generator.generate(full_prompt, track_count: count)
+  rescue StandardError => e
+    warn "❌ Gemini error: #{e.message}"
+    return
+  end
+
+  puts "\n📋 Gemini Recommended:"
+  curated[:tracks].each_with_index do |t, i|
+    puts "  #{i + 1}. #{t[:title]} - #{t[:artist]}"
+  end
+
+  print "\nDo you want to search and add these tracks to '#{playlist[:name]}'? (Y/n): "
+  return if %w[n no].include?($stdin.gets&.strip&.downcase)
+
+  found_uris = []
+  curated[:tracks].each do |t|
+    print "Searching for #{t[:title]} - #{t[:artist]}... "
+    match = spotify.search_track(t[:title], t[:artist])
+    if match
+      puts "✓ (#{match[:name]})"
+      found_uris << match[:uri]
+    else
+      puts "✗ Not found"
+    end
+  end
+
+  if found_uris.any?
+    spotify.add_tracks(playlist[:id], found_uris)
+    playlist[:total_tracks] = (playlist[:total_tracks] || 0) + found_uris.size
+    puts "🎉 Added #{found_uris.size} new tracks to '#{playlist[:name]}'!"
+  else
+    puts "⚠️ No matching tracks were found on Spotify."
+  end
+end
+
+# Edit Action 2: Add a single track manually
+def add_track_manually(spotify, playlist)
+  puts "\n➕ Add Track Manually"
+  print "Enter song title: "
+  title = $stdin.gets&.strip
+  return if title.nil? || title.empty?
+
+  print "Enter artist name (optional): "
+  artist = $stdin.gets&.strip
+
+  puts "🔍 Searching Spotify..."
+  match = spotify.search_track(title, artist)
+
+  if match.nil?
+    puts "❌ No match found on Spotify for '#{title}'."
+    return
+  end
+
+  puts "Found: #{match[:name]} by #{match[:artist]}"
+  print "Add this track to '#{playlist[:name]}'? (Y/n): "
+  return if %w[n no].include?($stdin.gets&.strip&.downcase)
+
+  spotify.add_tracks(playlist[:id], [match[:uri]])
+  playlist[:total_tracks] = (playlist[:total_tracks] || 0) + 1
+  puts "🎉 Track added successfully!"
+end
+
+# Edit Action 3: View playlist tracks
+def view_playlist_tracks(spotify, playlist)
+  puts "\n📄 Fetching tracks for '#{playlist[:name]}'..."
+  tracks = begin
+    spotify.playlist_tracks(playlist[:id])
+  rescue StandardError => e
+    warn "❌ Failed to fetch tracks: #{e.message}"
+    return
+  end
+
+  if tracks.empty?
+    puts "This playlist is currently empty."
+    return
+  end
+
+  puts "\n========================================================"
+  puts " Tracks in \"#{playlist[:name]}\" (#{tracks.size} total)"
+  puts "========================================================"
+  tracks.each_with_index do |t, i|
+    puts format(" %3d | %-38s | %s", i + 1, t[:name][0...38], t[:artist])
+  end
+  puts "========================================================"
+  print "\nPress Enter to return to playlist menu..."
+  $stdin.gets
+end
+
+# Edit Action 4: Remove tracks
+def remove_playlist_tracks(spotify, playlist)
+  puts "\n❌ Remove Tracks from '#{playlist[:name]}'"
+  tracks = begin
+    spotify.playlist_tracks(playlist[:id])
+  rescue StandardError => e
+    warn "❌ Failed to fetch tracks: #{e.message}"
+    return
+  end
+
+  if tracks.empty?
+    puts "This playlist has no tracks to remove."
+    return
+  end
+
+  tracks.each_with_index do |t, i|
+    puts format(" [%2d] %-38s - %s", i + 1, t[:name][0...38], t[:artist])
+  end
+
+  print "\nEnter track numbers to remove (e.g. 1, 3, 5) or '0' to cancel: "
+  input = $stdin.gets&.strip
+  return if input.nil? || input.empty? || input == '0'
+
+  indices = input.split(',').map { |s| s.strip.to_i - 1 }.select { |i| i >= 0 && i < tracks.size }
+  if indices.empty?
+    puts "⚠️ No valid track numbers selected."
+    return
+  end
+
+  to_remove = indices.map { |i| tracks[i] }
+  puts "\nSelected for removal:"
+  to_remove.each { |t| puts "  - #{t[:name]} by #{t[:artist]}" }
+  print "Are you sure you want to remove these #{to_remove.size} tracks? (y/N): "
+  return unless %w[y yes].include?($stdin.gets&.strip&.downcase)
+
+  spotify.remove_tracks(playlist[:id], to_remove.map { |t| t[:uri] })
+  playlist[:total_tracks] = [((playlist[:total_tracks] || 0) - to_remove.size), 0].max
+  puts "🗑️ Removed #{to_remove.size} tracks from '#{playlist[:name]}'."
+end
+
+# Edit Action 5: Edit playlist name & description
+def edit_playlist_details(spotify, playlist)
+  puts "\n✏️  Edit Playlist Name & Description"
+  puts "Current Name:        #{playlist[:name]}"
+  puts "Current Description: #{playlist[:description]}"
+
+  print "\nNew name (press Enter to keep current): "
+  new_name = $stdin.gets&.strip
+  new_name = nil if new_name.nil? || new_name.empty?
+
+  print "New description (press Enter to keep current): "
+  new_desc = $stdin.gets&.strip
+  new_desc = nil if new_desc.nil? || new_desc.empty?
+
+  if new_name.nil? && new_desc.nil?
+    puts "No changes made."
+    return
+  end
+
+  spotify.update_playlist(playlist[:id], name: new_name, description: new_desc)
+  playlist[:name] = new_name if new_name
+  playlist[:description] = new_desc if new_desc
+  puts "✅ Playlist details updated successfully!"
+end
+
+# Main Program Loop
+def main
+  options = {
+    model: ENV.fetch('GEMINI_MODEL', 'gemini-3.8-flash')
+  }
+
+  OptionParser.new do |opts|
+    opts.banner = 'Usage: ruby main.rb [options]'
+    opts.on('-m', '--model MODEL', String, 'Gemini model to use (default: gemini-3.8-flash)') do |m|
+      options[:model] = m
+    end
+    opts.on('-h', '--help', 'Show this help message') do
+      puts opts
+      exit 0
+    end
+  end.parse!
+
+  print_banner
+
+  gemini_key = ensure_gemini_key
+  spotify = init_spotify_client
+
+  # Main Menu
+  loop do
+    puts "\n========================================================"
+    puts " 📋 Main Menu"
+    puts "========================================================"
+    puts "  [1] 🎵 Create a new playlist (from Gemini AI prompt)"
+    puts "  [2] ✏️  Edit an existing playlist (show all & search by name)"
+    puts "  [0] 🚪 Exit"
+    print "\nEnter your choice (1, 2, or 0): "
+
+    choice = $stdin.gets&.strip
+
+    case choice
+    when '1'
+      create_playlist_flow(spotify, gemini_key, options[:model])
+    when '2'
+      edit_playlist_flow(spotify, gemini_key, options[:model])
+    when '0', 'q', 'exit'
+      puts "\n👋 Goodbye! Happy listening!"
+      break
+    else
+      puts "⚠️ Invalid option. Please select 1, 2, or 0."
+    end
+  end
 end
 
 if __FILE__ == $PROGRAM_NAME

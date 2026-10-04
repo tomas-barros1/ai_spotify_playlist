@@ -50,31 +50,37 @@ A terminal-only Ruby application that transforms any prompt into a curated Spoti
 
 ## 💻 Usage
 
-### 1. Interactive Mode
-Run the script without arguments. It will prompt you for your playlist theme/idea:
+Run the terminal application:
 ```bash
 bundle exec ruby main.rb
 ```
 
-### 2. Passing Prompt via CLI Argument
-You can pass the prompt directly as a string:
-```bash
-bundle exec ruby main.rb "90s shoegaze and dream pop"
+### Main Menu Options:
+
+```text
+========================================================
+ 📋 Main Menu
+========================================================
+  [1] 🎵 Create a new playlist (from Gemini AI prompt)
+  [2] ✏️  Edit an existing playlist (show all & search by name)
+  [0] 🚪 Exit
 ```
 
-### 3. Customizing Track Count and Privacy
-- Specify number of songs (default is 10):
-  ```bash
-  bundle exec ruby main.rb "upbeat funk and disco for cleaning the house" -n 15
-  ```
-- Make the playlist public on your profile (default is private):
-  ```bash
-  bundle exec ruby main.rb "lo-fi hip hop study beats" -p
-  ```
-- Switch the Gemini model:
-  ```bash
-  bundle exec ruby main.rb "late night jazz trio" -m gemini-2.5-pro
-  ```
+#### Option 1: Create a New Playlist
+- Enter your playlist idea/vibe (e.g., `"lo-fi hip hop study beats"`).
+- Select track count (default: 10).
+- Gemini curates the tracks and title using `ruby_llm`.
+- Songs are automatically verified and added to your Spotify account.
+
+#### Option 2: Edit an Existing Playlist
+- **View all playlists**: Automatically lists all your Spotify playlists with track count and owner.
+- **Search by name**: Simply type any keyword (e.g. `funk`, `rock`, `jazz`) to instantly filter your playlists.
+- **Select & Edit**: Enter the playlist number to access editing actions:
+  - `[1] 🤖 Add more tracks with Gemini AI` (prompt-based addition matching the vibe)
+  - `[2] ➕ Add a track manually` (search title/artist)
+  - `[3] 📄 View current tracks in this playlist`
+  - `[4] ❌ Remove tracks from this playlist`
+  - `[5] ✏️  Rename playlist or update description`
 
 ---
 
